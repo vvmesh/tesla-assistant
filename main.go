@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -226,7 +225,8 @@ func inspect(data *ResposneStatus) error {
 		}
 	}
 
-	clone(data, &latestState)
+	//更新数据状态
+	latestState = data
 	return nil
 
 }
@@ -299,15 +299,6 @@ func sendDingTalkMessage(title string, text string) error {
 	// 输出响应内容
 	logger.Debug(jsonString)
 	return nil
-}
-
-func clone(src, dst interface{}) error {
-	var buf bytes.Buffer
-	err := gob.NewEncoder(&buf).Encode(src)
-	if err != nil {
-		return err
-	}
-	return gob.NewDecoder(&buf).Decode(dst)
 }
 
 /*
