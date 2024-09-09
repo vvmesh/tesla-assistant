@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"reflect"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
@@ -18,9 +19,9 @@ var opts = &slog.HandlerOptions{
 }
 var logger = slog.New(slog.NewTextHandler(os.Stdout, opts))
 
-var latestState *ResposneStatus
+var latestState ResposneStatus
 
-var config *Configuration
+var config Configuration
 
 type ResposneStatus struct {
 	Data struct {
@@ -70,8 +71,8 @@ type Configuration struct {
 	DingRobotWebhook string
 }
 
-func loadConfig() *Configuration {
-	return &Configuration{
+func loadConfig() Configuration {
+	return Configuration{
 		TeslaApiURL:      os.Getenv("TESLA_API_URL"),            // https://your_teslamate_api_server/api
 		DingRobotWebhook: os.Getenv("NOTIFY_DINGROBOT_WEBHOOK"), // https://oapi.dingtalk.com/robot/send?access_token=your_access_token
 	}
@@ -84,14 +85,14 @@ func main() {
 	cronTask()
 
 	// create a scheduler
-	s, err := gocron.NewScheduler()
+	scheduler, err := gocron.NewScheduler()
 	if err != nil {
 		logger.Error("Create scheduler error:", err)
 		return
 	}
 
 	// add a job to the scheduler
-	j, err := s.NewJob(
+	j, err := scheduler.NewJob(
 		gocron.DurationJob(
 			60*time.Second,
 		),
@@ -110,10 +111,10 @@ func main() {
 		return
 	}
 	// each job has a unique id
-	logger.Error("Create job :", j.ID())
+	logger.Error("Create job : ", j.ID())
 
 	// start the scheduler
-	s.Start()
+	scheduler.Start()
 
 	// block until you are ready to shut down
 	select {
@@ -123,7 +124,7 @@ func main() {
 	// when you're done, shut it down
 	//err = s.Shutdown()
 	//if err != nil {
-	//	logger.Error("Shutdown scheduler error:", err)
+	//      logger.Error("Shutdown scheduler error:", err)
 	//}
 
 }
@@ -131,117 +132,131 @@ func cronTask() {
 	// 执行你的任务代码
 	logger.Debug("Task executed at", time.Now())
 
+	response, err := requestTeslaAPI()
+	if err != nil {
+		logger.Error("failed to call api: ", err)
+		return
+	}
+
+	logger.Debug(fmt.Sprintf("CarId: %d", response.Data.Car.CarId))
+	logger.Debug(fmt.Sprintf("CarName: %s", response.Data.Car.CarName))
+
+	//车辆状态 charging|sleep
+	logger.Debug(fmt.Sprintf("State: %s", response.Data.Status.State))
+
+	t, err := time.Parse(time.RFC3339, response.Data.Status.StateSince)
+
+	logger.Debug(fmt.Sprintf("StateSince: %s", t))
+
+	//剩余电量   xx (%)   如 80
+	logger.Debug(fmt.Sprintf("BatteryLevel: %d", response.Data.Status.BatteryDetails.BatteryLevel))
+
+	// 读取电源插头状态 true|false
+	logger.Debug(fmt.Sprintf("PluggedIn: %t", response.Data.Status.ChargingDetails.PluggedIn))
+
+	// 读取充电状态 32  充电器最大功率？？？？
+	logger.Debug(fmt.Sprintf("ChargerActualCurrent: %d", response.Data.Status.ChargingDetails.ChargerActualCurrent))
+
+	//充满剩余时间 x.xx(小时)
+	logger.Debug(fmt.Sprintf("TimeToFullCharge: %f", response.Data.Status.ChargingDetails.TimeToFullCharge))
+
+	//充电功率 7 16 32  (kw)
+	logger.Debug(fmt.Sprintf("ChargerPower: %d", response.Data.Status.ChargingDetails.ChargerPower))
+
+	//充电阶段 1-交流？充电中？？？
+	logger.Debug(fmt.Sprintf("ChargerPhases: %d", response.Data.Status.ChargingDetails.ChargerPhases))
+
+	inspect(response)
+
+	//更新最新数据状态
+	latestState = response
+
+}
+
+func requestTeslaAPI() (ResposneStatus, error) {
+
 	// 检查车辆状态
 	response, err := http.Get(config.TeslaApiURL + "/v1/cars/1/status")
 	if err != nil {
-		logger.Error("Request Error:", err)
-		return
+		return ResposneStatus{}, fmt.Errorf("failed to send request: %v", err)
 	}
 	defer response.Body.Close()
 
 	// 读取响应内容
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		logger.Error("读取响应内容错误:", err)
-		return
+		return ResposneStatus{}, fmt.Errorf("failed to read response: %v", err)
 	}
 
 	jsonString := string(body)
 
 	// 输出响应内容
 	//printJson(jsonString)
-
 	data := &ResposneStatus{}
-	unmarshal_err := json.Unmarshal([]byte(jsonString), data)
-	if unmarshal_err != nil {
-		logger.Error("解析 JSON 错误:", unmarshal_err)
-		return
+	parse_err := json.Unmarshal([]byte(jsonString), data)
+	if parse_err != nil {
+		return ResposneStatus{}, fmt.Errorf("failed to parse response: %v", parse_err)
 	}
-
-	logger.Debug(fmt.Sprintf("CarId: %d", data.Data.Car.CarId))
-	logger.Debug(fmt.Sprintf("CarName: %s", data.Data.Car.CarName))
-
-	//车辆状态 charging|sleep
-	logger.Debug(fmt.Sprintf("State: %s", data.Data.Status.State))
-
-	t, err := time.Parse(time.RFC3339, data.Data.Status.StateSince)
-
-	logger.Debug(fmt.Sprintf("StateSince: %s", t))
-
-	//剩余电量   xx (%)   如 80
-	logger.Debug(fmt.Sprintf("BatteryLevel: %d", data.Data.Status.BatteryDetails.BatteryLevel))
-
-	// 读取电源插头状态 true|false
-	logger.Debug(fmt.Sprintf("PluggedIn: %t", data.Data.Status.ChargingDetails.PluggedIn))
-
-	// 读取充电状态 32  充电器最大功率？？？？
-	logger.Debug(fmt.Sprintf("ChargerActualCurrent: %d", data.Data.Status.ChargingDetails.ChargerActualCurrent))
-
-	//充满剩余时间 x.xx(小时)
-	logger.Debug(fmt.Sprintf("TimeToFullCharge: %f", data.Data.Status.ChargingDetails.TimeToFullCharge))
-
-	//充电功率 7 16 32  (kw)
-	logger.Debug(fmt.Sprintf("ChargerPower: %d", data.Data.Status.ChargingDetails.ChargerPower))
-
-	//充电阶段 1-交流？充电中？？？
-	logger.Debug(fmt.Sprintf("ChargerPhases: %d", data.Data.Status.ChargingDetails.ChargerPhases))
-
-	inspect(data)
+	return *data, nil
 
 }
 
-func inspect(data *ResposneStatus) error {
+func inspect(currentState ResposneStatus) error {
 
-	if latestState == nil {
-		notify("监控程序启动", data)
+	if reflect.ValueOf(latestState).IsZero() {
+		notify("监控程序启动", currentState)
 	} else {
 		//由非充电状态 进入充电状态
-		if !latestState.Data.Status.ChargingDetails.PluggedIn && data.Data.Status.ChargingDetails.PluggedIn {
-			notify("充电枪已接入", data)
+		if !latestState.Data.Status.ChargingDetails.PluggedIn && currentState.Data.Status.ChargingDetails.PluggedIn {
+			notify("充电枪已接入", currentState)
 		}
-		if "charging" != latestState.Data.Status.State && "charging" == data.Data.Status.State {
-			notify("已开始充电", data)
+		if "charging" != latestState.Data.Status.State && "charging" == currentState.Data.Status.State {
+			notify("已开始充电", currentState)
 		}
 
-		if "charging" == latestState.Data.Status.State && "charging" != data.Data.Status.State {
-			notify("已停止充电", data)
+		if "charging" == latestState.Data.Status.State && "charging" != currentState.Data.Status.State {
+			notify("已停止充电", currentState)
 		}
-		if latestState.Data.Status.ChargingDetails.PluggedIn && !data.Data.Status.ChargingDetails.PluggedIn {
-			notify("充电枪已断开", data)
+		if latestState.Data.Status.ChargingDetails.PluggedIn && !currentState.Data.Status.ChargingDetails.PluggedIn {
+			notify("充电枪已断开", currentState)
 		}
 
 	}
 
 	//检查状态
-	if data.Data.Status.ChargingDetails.PluggedIn {
+	if currentState.Data.Status.ChargingDetails.PluggedIn {
 
-		var timeToFullChargeSeconds = int(3600 * data.Data.Status.ChargingDetails.TimeToFullCharge)
+		var timeToFullChargeSeconds = int(3600 * currentState.Data.Status.ChargingDetails.TimeToFullCharge)
 
 		//已满电
 		if timeToFullChargeSeconds <= 0 {
-			notify("已完成充电", data)
+			notify("已完成充电", currentState)
 		} else if timeToFullChargeSeconds == 300 {
-			notify("即将完成充电", data)
+			notify("即将完成充电", currentState)
 		}
 	}
 
-	//更新数据状态
-	latestState = data
 	return nil
 
 }
-func notify(title string, data *ResposneStatus) error {
+
+func notify(title string, currentState ResposneStatus) error {
 
 	content := fmt.Sprintf("## Tesla%s  \n  ", title)
-	content += fmt.Sprintf("#### - 车辆名称\t%s  \n  ", data.Data.Car.CarName)
-	content += fmt.Sprintf("#### - 车辆状态\t%s  \n  ", data.Data.Status.State)
-	content += fmt.Sprintf("#### - 电池电量\t%d%%  \n  ", data.Data.Status.BatteryDetails.BatteryLevel)
-	content += fmt.Sprintf("#### - 充电枪接入\t%t  \n  ", data.Data.Status.ChargingDetails.PluggedIn)
-	content += fmt.Sprintf("#### - 充电功率\t%dkw  \n  ", data.Data.Status.ChargingDetails.ChargerActualCurrent)
-	content += fmt.Sprintf("#### - 剩余时间\t%d分钟  \n  ", int(60*data.Data.Status.ChargingDetails.TimeToFullCharge))
-
-	stateSince := data.Data.Status.StateSince
-	stateSinceTime, err := time.Parse(time.RFC3339, data.Data.Status.StateSince)
+	content += fmt.Sprintf("#### - 车辆名称\t%s  \n  ", currentState.Data.Car.CarName)
+	content += fmt.Sprintf("#### - 车辆状态\t%s  \n  ", currentState.Data.Status.State)
+	content += fmt.Sprintf("#### - 电池电量\t%d%%  \n  ", currentState.Data.Status.BatteryDetails.BatteryLevel)
+	if currentState.Data.Status.ChargingDetails.PluggedIn {
+		content += fmt.Sprintf("#### - 充电枪接入\t%t  \n  ", currentState.Data.Status.ChargingDetails.PluggedIn)
+	}
+	if currentState.Data.Status.ChargingDetails.ChargerActualCurrent != 0 {
+		content += fmt.Sprintf("#### - 充电功率\t%dkw  \n  ", currentState.Data.Status.ChargingDetails.ChargerActualCurrent)
+	}
+	if currentState.Data.Status.ChargingDetails.TimeToFullCharge != 0 {
+		content += fmt.Sprintf("#### - 剩余时间\t%d分钟  \n  ", int(60*currentState.Data.Status.ChargingDetails.TimeToFullCharge))
+	}
+	stateSince := currentState.Data.Status.StateSince
+	stateSinceTime, err := time.Parse(time.RFC3339, currentState.Data.Status.StateSince)
 	if err == nil {
 		stateSince = stateSinceTime.Format("2006-01-02 15:04:05")
 	}
@@ -249,6 +264,9 @@ func notify(title string, data *ResposneStatus) error {
 	content += fmt.Sprintf("###### %s \n  ", time.Now().Format("2006-01-02 15:04:05"))
 
 	sendDingTalkMessage(title, content)
+	if err != nil {
+		return fmt.Errorf("Send DingTalk message failed: %v", err)
+	}
 	return nil
 
 }
@@ -285,13 +303,12 @@ func sendDingTalkMessage(title string, text string) error {
 
 	// 检查响应
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to send message, status: %s", resp.Status)
+		return fmt.Errorf("failed to response code, status: %v", err)
 	}
 	// 读取响应内容
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		logger.Error("读取响应内容错误:", err)
-		return nil
+		return fmt.Errorf("failed to read response: %v", err)
 	}
 
 	jsonString := string(body)
@@ -303,18 +320,18 @@ func sendDingTalkMessage(title string, text string) error {
 
 /*
 func printJson(jsonStr string) {
-	var data interface{}
-	err := json.Unmarshal([]byte(jsonStr), &data)
-	if err != nil {
-		logger.Error("解析 JSON 错误:", err)
-		return
-	}
+        var data interface{}
+        err := json.Unmarshal([]byte(jsonStr), &data)
+        if err != nil {
+                logger.Error("解析 JSON 错误:", err)
+                return
+        }
 
-	formattedJSON, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		logger.Error("格式化 JSON 错误")
-		return
-	}
-	fmt.Println(string(formattedJSON))
+        formattedJSON, err := json.MarshalIndent(data, "", "  ")
+        if err != nil {
+                logger.Error("格式化 JSON 错误")
+                return
+        }
+        fmt.Println(string(formattedJSON))
 }
 */

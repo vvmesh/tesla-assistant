@@ -1,4 +1,4 @@
-FROM golang:1.23 AS builder
+FROM golang:1.23-alpine AS builder
 WORKDIR /workspace
 #ENV GO111MODULE=on CGO_ENABLED=0
 
@@ -8,7 +8,7 @@ RUN go build -o /app/tesla-assistant
 
 
 
-FROM golang:1.23 AS release
+FROM golang:1.23-alpine AS release
 WORKDIR /app
 
 # Copy from builder
