@@ -21,6 +21,9 @@ var logger = slog.New(slog.NewTextHandler(os.Stdout, opts))
 
 var latestState ResposneStatus
 
+var latestPluggedInTimestamp (int64) = 0
+var notifyCounter = 0
+
 var config Configuration
 
 type ResposneStatus struct {
@@ -209,9 +212,12 @@ func inspect(currentState ResposneStatus) error {
 		//由非充电状态 进入充电状态
 		if !latestState.Data.Status.ChargingDetails.PluggedIn && currentState.Data.Status.ChargingDetails.PluggedIn {
 			notify("充电枪已接入", currentState)
+			latestPluggedInTimestamp = time.Now().Unix()
+			notifyCounter = 0
 		}
 		if "charging" != latestState.Data.Status.State && "charging" == currentState.Data.Status.State {
 			notify("已开始充电", currentState)
+
 		}
 
 		if "charging" == latestState.Data.Status.State && "charging" != currentState.Data.Status.State {
@@ -219,6 +225,7 @@ func inspect(currentState ResposneStatus) error {
 		}
 		if latestState.Data.Status.ChargingDetails.PluggedIn && !currentState.Data.Status.ChargingDetails.PluggedIn {
 			notify("充电枪已断开", currentState)
+			latestPluggedInTimestamp = 0
 		}
 
 	}
@@ -226,13 +233,16 @@ func inspect(currentState ResposneStatus) error {
 	//检查状态
 	if currentState.Data.Status.ChargingDetails.PluggedIn {
 
-		var timeToFullChargeSeconds = int(3600 * currentState.Data.Status.ChargingDetails.TimeToFullCharge)
-
 		//已满电
-		if timeToFullChargeSeconds <= 0 {
-			notify("已完成充电", currentState)
-		} else if timeToFullChargeSeconds == 300 {
+		if latestState.Data.Status.BatteryDetails.BatteryLevel == 98 && currentState.Data.Status.BatteryDetails.BatteryLevel == 99 {
 			notify("即将完成充电", currentState)
+		} else if currentState.Data.Status.BatteryDetails.BatteryLevel == 100 {
+			if currentState.Data.Status.ChargingDetails.ChargerActualCurrent == 0 {
+				notify("已完成充电", currentState)
+			} else if currentState.Data.Status.ChargingDetails.ChargerActualCurrent > 0 && notifyCounter%5 == 0 {
+				notify("充电电量已满", currentState)
+				notifyCounter++
+			}
 		}
 	}
 
