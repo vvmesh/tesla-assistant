@@ -56,6 +56,17 @@ type ResposneStatus struct {
 				UsableBatteryLevel int     `json:"usable_battery_level"`
 			} `json:"battery_details"`
 
+			CarGeodata struct {
+				Geofence string `json:"geofence"`
+				Location struct {
+					Latitude  float32 `json:"latitude"`
+					Longitude float32 `json:"longitude"`
+				} `json:"location"`
+
+				Latitude  float32 `json:"latitude"`
+				Longitude float32 `json:"longitude"`
+			} `json:"car_geodata"`
+
 			ClimateDetails struct {
 				InsideTemp        float32 `json:"inside_temp"`
 				IsClimateOn       bool    `json:"is_climate_on"`
